@@ -1,0 +1,1 @@
+experiment_id,git_commit,seed,model,train_data,validation_data,config_path,checkpoint_path,rouge1,rouge2,rougeL,extractiveness,params,train_time,notes\n

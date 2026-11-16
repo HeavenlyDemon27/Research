@@ -1,0 +1,13 @@
+# We'll pin exact versions after the first Colab environment check.
+torch
+transformers
+datasets
+evaluate
+rouge-score
+accelerate
+sentencepiece
+tensorboard
+pandas
+numpy
+matplotlib
+pyyaml
