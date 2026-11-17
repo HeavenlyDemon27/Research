@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+env/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -10,6 +11,7 @@ venv/
 
 # Local secrets
 .env
+.env.*
 *.token
 
 # Large artifacts / data (keep outside Git)
