@@ -16,6 +16,8 @@ env/
 
 # Large artifacts / data (keep outside Git)
 data/
+!projects/01-mini-bart/data/
+!projects/01-mini-bart/data/smoke_test.json
 artifacts/
 checkpoints/
 outputs/
