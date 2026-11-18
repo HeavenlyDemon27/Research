@@ -23,12 +23,13 @@
 #We don't want every example to be padded to 1024 tokens regardless of its length
 #Instead, we pad each batch only to the longest sequence in that batch. This saves GPU memory and computation
 
-from datasets import load_dataset
+
 from transformers import (
     AutoTokenizer,
     DataCollatorForSeq2Seq,
 )
-from torch.utils.data import DataLoader
+import json
+from torch.utils.data import Dataset, DataLoader
 import torch
 
 
@@ -43,8 +44,79 @@ DATASET_VERSION = "3.0.0"
 MAX_INPUT_LENGTH = 1024
 MAX_TARGET_LENGTH = 128
 BATCH_SIZE = 2
+class JsonSummarizationDataset(Dataset):
 
+    def __init__(
+        self,
+        records,
+        tokenizer,
+        max_input_length=MAX_INPUT_LENGTH,
+        max_target_length=MAX_TARGET_LENGTH,
+    ):
+        self.records = records
+        self.tokenizer = tokenizer
+        self.max_input_length = max_input_length
+        self.max_target_length = max_target_length
 
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        record = self.records[idx]
+
+        article = record["article"]
+        summary = record["highlights"]
+
+        inputs = self.tokenizer(
+            article,
+            max_length=self.max_input_length,
+            truncation=True,
+        )
+
+        targets = self.tokenizer(
+            text_target=summary,
+            max_length=self.max_target_length,
+            truncation=True,
+        )
+
+        return {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "labels": targets["input_ids"],
+        }
+
+def create_json_dataloader(
+    json_path,
+    tokenizer,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=0,
+):
+    with open(json_path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    dataset = JsonSummarizationDataset(
+        records=records,
+        tokenizer=tokenizer,
+    )
+
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=None,
+        padding=True,
+        label_pad_token_id=-100,
+        return_tensors="pt",
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        collate_fn=data_collator,
+        num_workers=num_workers,
+    )
+
+    return dataloader
 # --------------------------------------------------
 # 2. Load tokenizer
 # --------------------------------------------------
@@ -75,7 +147,7 @@ def load_cnn_dailymail():
     """
     Load train, validation and test splits.
     """
-
+    from datasets import load_dataset
     dataset = load_dataset(
         DATASET_NAME,
         DATASET_VERSION
