@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 # Training configuration
 LEARNING_RATE = 5e-5
 WEIGHT_DECAY = 0.01
-NUM_EPOCHS = 3
+NUM_EPOCHS = 2
 WARMUP_RATIO = 0.06
 MAX_GRAD_NORM = 1.0
 # Checkpoint configuration
