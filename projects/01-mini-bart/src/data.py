@@ -29,7 +29,7 @@ from transformers import (
     DataCollatorForSeq2Seq,
 )
 import json
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Sampler
 import torch
 
 
@@ -246,6 +246,56 @@ def prepare_dataset(
 # 6. Create PyTorch DataLoaders
 # --------------------------------------------------
 
+class StatefulRandomSampler(Sampler):
+    """
+    Random sampler that preserves its permutation and current position,
+    allowing training to resume partway through an epoch.
+    """
+
+    def __init__(self, data_source, generator=None):
+        self.data_source = data_source
+        self.generator = generator or torch.Generator()
+
+        self.permutation = None
+        self.position = 0
+        self.epoch = 0
+
+    def __iter__(self):
+        if self.permutation is None:
+            self.permutation = torch.randperm(
+                len(self.data_source),
+                generator=self.generator,
+            ).tolist()
+            self.position = 0
+
+        while self.position < len(self.permutation):
+            index = self.permutation[self.position]
+            self.position += 1
+            yield index
+
+        self.permutation = None
+        self.position = 0
+        self.epoch += 1
+
+    def __len__(self):
+        if self.permutation is None:
+            return len(self.data_source)
+        return len(self.permutation) - self.position
+
+    def state_dict(self):
+        return {
+            "generator_state": self.generator.get_state(),
+            "permutation": self.permutation,
+            "position": self.position,
+            "epoch": self.epoch,
+        }
+
+    def load_state_dict(self, state):
+        self.generator.set_state(state["generator_state"])
+        self.permutation = state["permutation"]
+        self.position = state["position"]
+        self.epoch = state["epoch"]
+
 def create_dataloaders(
     tokenized_dataset,
     tokenizer,
@@ -269,11 +319,14 @@ def create_dataloaders(
         label_pad_token_id=-100,
         return_tensors="pt",
     )
-
+    train_sampler = StatefulRandomSampler(
+       tokenized_dataset["train"],
+       generator=torch.Generator().manual_seed(42),
+    )
     train_loader = DataLoader(
         tokenized_dataset["train"],
         batch_size=batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         collate_fn=data_collator,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
