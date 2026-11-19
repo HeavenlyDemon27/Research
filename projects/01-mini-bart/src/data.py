@@ -38,7 +38,7 @@ import torch
 # --------------------------------------------------
 
 MODEL_NAME = "facebook/bart-large-cnn"
-DATASET_NAME = "cnn_dailymail"
+DATASET_NAME = "abisee/cnn_dailymail"
 DATASET_VERSION = "3.0.0"
 
 MAX_INPUT_LENGTH = 1024
