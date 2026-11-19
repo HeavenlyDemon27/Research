@@ -1,7 +1,8 @@
 # Mini-BART
 
 ## Working research question
-Does architectural compression and knowledge distillation preserve BART's abstractive summarization behavior, or does it change the balance between novel wording and source copying?
+When bart is compressed through knowledge distillation, does the smaller model preserve genuinely abstractive summarisation ability,or does it increasingly rely on extractive shortcuts?
+[Does architectural compression and knowledge distillation preserve BART's abstractive summarization behavior, or does it change the balance between novel wording and source copying?]
 
 ## Planned comparisons
 1. Fine-tuned BART teacher (reference).
