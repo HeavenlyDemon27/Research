@@ -6,7 +6,8 @@ E1 uses supervised cross-entropy only.
 
 import os
 import torch
-
+import random
+import numpy as np
 from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from tqdm.auto import tqdm
@@ -18,7 +19,10 @@ WEIGHT_DECAY = 0.01
 NUM_EPOCHS = 3
 WARMUP_RATIO = 0.06
 MAX_GRAD_NORM = 1.0
-
+# Checkpoint configuration
+CHECKPOINT_EVERY_STEPS = 500
+LATEST_CHECKPOINT_NAME = "latest_checkpoint.pt"
+BEST_CHECKPOINT_NAME = "best_checkpoint.pt"
 
 def create_optimizer_and_scheduler(model, total_training_steps):
 
@@ -66,6 +70,11 @@ def train_one_epoch(
     scheduler,
     device,
     scaler=None,
+    global_step=0,
+    train_sampler=None,
+    output_dir=None,
+    epoch=0,
+    best_val_loss=float("inf"),
 ):
     model.train()
 
@@ -76,7 +85,7 @@ def train_one_epoch(
 
     progress_bar = tqdm(dataloader, desc="Training")
 
-    for batch in progress_bar:
+    for batch_position, batch in enumerate(progress_bar, start=1):
 
         batch = {
             key: value.to(device, non_blocking=True)
@@ -93,6 +102,8 @@ def train_one_epoch(
             loss = outputs.loss
 
         if scaler is not None and use_amp:
+            old_scale = scaler.get_scale()
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
 
@@ -104,6 +115,11 @@ def train_one_epoch(
             scaler.step(optimizer)
             scaler.update()
 
+            # GradScaler reduces its scale when an optimizer
+            # update is skipped because of FP16 overflow.
+            if scaler.get_scale() >= old_scale:
+                scheduler.step()
+
         else:
             loss.backward()
 
@@ -113,8 +129,7 @@ def train_one_epoch(
             )
 
             optimizer.step()
-
-        scheduler.step()
+            scheduler.step()
 
         batch_size = batch["input_ids"].size(0)
         total_loss += loss.item() * batch_size
@@ -124,11 +139,31 @@ def train_one_epoch(
             loss=f"{loss.item():.4f}",
             lr=f"{scheduler.get_last_lr()[0]:.2e}",
         )
+        global_step += 1
+
+        if (
+            global_step % CHECKPOINT_EVERY_STEPS == 0
+            and train_sampler is not None
+            and output_dir is not None
+            and train_sampler.position < len(train_sampler.data_source)
+        ):
+            save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=epoch,
+                batch_position=batch_position,
+                global_step=global_step,
+                best_val_loss=best_val_loss,
+                train_sampler=train_sampler,
+                output_dir=output_dir,
+            )
 
     if total_examples == 0:
         raise ValueError("Training dataloader is empty.")
 
-    return total_loss / total_examples
+    return total_loss / total_examples, global_step
 
 
 def validate_one_epoch(model, dataloader, device):
@@ -173,37 +208,139 @@ def save_checkpoint(
     scheduler,
     scaler,
     epoch,
+    batch_position,
+    global_step,
     best_val_loss,
+    train_sampler,
     output_dir,
+    filename=LATEST_CHECKPOINT_NAME,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
     checkpoint = {
+        # Progress
         "epoch": epoch,
+        "batch_position": batch_position,
+        "global_step": global_step,
+
+        # Model and training state
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+
+        # Experiment state
         "best_val_loss": best_val_loss,
+
+        # Sampler state (reproducible data order)
+        "sampler_state_dict": train_sampler.state_dict(),
+
+        # Random number generator states
+        "rng_state": {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None
+            ),
+        },
+
+        # Hyperparameters
         "config": {
             "learning_rate": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
             "num_epochs": NUM_EPOCHS,
             "warmup_ratio": WARMUP_RATIO,
             "max_grad_norm": MAX_GRAD_NORM,
+            "checkpoint_every_steps": CHECKPOINT_EVERY_STEPS,
             "objective": "supervised_cross_entropy_only",
         },
     }
 
-    path = os.path.join(output_dir, "best_checkpoint.pt")
+    path = os.path.join(
+        output_dir,
+        filename,
+    )
 
     temporary_path = path + ".tmp"
+
     torch.save(checkpoint, temporary_path)
     os.replace(temporary_path, path)
+    display_epoch = epoch if batch_position == 0 else epoch + 1
 
-    print(f"Best checkpoint saved: {path}")
+    print(
+        f"Checkpoint saved | "
+        f"epoch={epoch + 1} | "
+        f"step={global_step} | "
+        f"batch_position={batch_position}"
+    )
+def load_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    train_sampler,
+    device,
+):
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location="cpu",
+        weights_only=False,
+    )
 
+    # Restore model
+    model.load_state_dict(checkpoint["model_state_dict"])
 
+    # Restore training components
+    optimizer.load_state_dict(
+        checkpoint["optimizer_state_dict"]
+    )
+
+    scheduler.load_state_dict(
+        checkpoint["scheduler_state_dict"]
+    )
+
+    if scaler is not None:
+        scaler.load_state_dict(
+            checkpoint["scaler_state_dict"]
+        )
+
+    # Restore data sampling position/order
+    train_sampler.load_state_dict(
+        checkpoint["sampler_state_dict"]
+    )
+
+    # Restore random number generator states
+    rng_state = checkpoint["rng_state"]
+
+    random.setstate(rng_state["python"])
+    np.random.set_state(rng_state["numpy"])
+    torch.set_rng_state(rng_state["torch"])
+
+    if (
+        torch.cuda.is_available()
+        and rng_state["cuda"] is not None
+    ):
+        torch.cuda.set_rng_state_all(
+            rng_state["cuda"]
+        )
+
+    print(
+        f"Checkpoint restored | "
+        f"epoch={checkpoint['epoch'] + 1} | "
+        f"step={checkpoint['global_step']} | "
+        f"batch_position={checkpoint['batch_position']}"
+    )
+
+    return {
+        "epoch": checkpoint["epoch"],
+        "batch_position": checkpoint["batch_position"],
+        "global_step": checkpoint["global_step"],
+        "best_val_loss": checkpoint["best_val_loss"],
+    }    
 def train_model(
     model,
     train_dataloader,
@@ -211,8 +348,19 @@ def train_model(
     device,
     output_dir,
     num_epochs=NUM_EPOCHS,
+    resume_from=None,
 ):
     model.to(device)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Retrieve the stateful sampler used by the training DataLoader.
+    train_sampler = train_dataloader.sampler
+
+    if not hasattr(train_sampler, "state_dict"):
+        raise TypeError(
+            "Training DataLoader must use a sampler with state_dict() "
+            "for checkpoint resumption."
+        )
 
     total_steps = len(train_dataloader) * num_epochs
 
@@ -222,25 +370,52 @@ def train_model(
     )
 
     use_amp = device.type == "cuda"
-
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     best_val_loss = float("inf")
+    global_step = 0
+    start_epoch = 0
     history = []
 
-    for epoch in range(num_epochs):
+    # Resume from an existing checkpoint if requested.
+    if resume_from is not None:
+        print(f"Resuming training from: {resume_from}")
 
-        print(f"\n{'=' * 50}")
-        print(f"Epoch {epoch + 1}/{num_epochs}")
-        print(f"{'=' * 50}")
+        resume_state = load_checkpoint(
+            checkpoint_path=resume_from,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            train_sampler=train_sampler,
+            device=device,
+        )
 
-        train_loss = train_one_epoch(
-            model,
-            train_dataloader,
-            optimizer,
-            scheduler,
-            device,
-            scaler,
+        start_epoch = resume_state["epoch"]
+        global_step = resume_state["global_step"]
+        best_val_loss = resume_state["best_val_loss"]
+
+        print(
+            f"Resuming at epoch {start_epoch + 1}, "
+            f"global step {global_step}"
+        )
+
+    # Training loop.
+    for epoch in range(start_epoch, num_epochs):
+        print(f"\nEpoch {epoch + 1}/{num_epochs}")
+
+        train_loss, global_step = train_one_epoch(
+            model=model,
+            dataloader=train_dataloader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            scaler=scaler,
+            global_step=global_step,
+            train_sampler=train_sampler,
+            output_dir=output_dir,
+            epoch=epoch,
+            best_val_loss=best_val_loss,
         )
 
         val_loss = validate_one_epoch(
@@ -249,8 +424,11 @@ def train_model(
             device,
         )
 
-        print(f"Training loss:   {train_loss:.4f}")
-        print(f"Validation loss: {val_loss:.4f}")
+        print(
+            f"Epoch {epoch + 1} | "
+            f"Train Loss: {train_loss:.4f} | "
+            f"Validation Loss: {val_loss:.4f}"
+        )
 
         history.append({
             "epoch": epoch + 1,
@@ -258,25 +436,51 @@ def train_model(
             "val_loss": val_loss,
         })
 
+        # Save the best checkpoint when validation loss improves.
         if val_loss < best_val_loss:
-
             best_val_loss = val_loss
 
             save_checkpoint(
-                model,
-                optimizer,
-                scheduler,
-                scaler,
-                epoch + 1,
-                best_val_loss,
-                output_dir,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=epoch + 1,
+                batch_position=0,
+                global_step=global_step,
+                best_val_loss=best_val_loss,
+                train_sampler=train_sampler,
+                output_dir=output_dir,
+                filename=BEST_CHECKPOINT_NAME,
             )
+
+            print("New best validation checkpoint saved.")
+
+        # Always save the latest state at the epoch boundary.
+        save_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            epoch=epoch + 1,
+            batch_position=0,
+            global_step=global_step,
+            best_val_loss=best_val_loss,
+            train_sampler=train_sampler,
+            output_dir=output_dir,
+            filename=LATEST_CHECKPOINT_NAME,
+        )
 
     return {
         "history": history,
         "best_val_loss": best_val_loss,
         "best_checkpoint": os.path.join(
             output_dir,
-            "best_checkpoint.pt",
+            BEST_CHECKPOINT_NAME,
         ),
+        "latest_checkpoint": os.path.join(
+            output_dir,
+            LATEST_CHECKPOINT_NAME,
+        ),
+        "global_step": global_step,
     }

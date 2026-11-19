@@ -330,6 +330,7 @@ def create_dataloaders(
         collate_fn=data_collator,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        generator=torch.Generator().manual_seed(123),
     )
 
     val_loader = DataLoader(
