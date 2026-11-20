@@ -75,11 +75,14 @@ def train_one_epoch(
     output_dir=None,
     epoch=0,
     best_val_loss=float("inf"),
+    epoch_loss_sum=0.0,
+    epoch_examples=0,
 ):
     model.train()
 
-    total_loss = 0.0
-    total_examples = 0
+    # Carry these accumulators across mid-epoch checkpoint/resume.
+    total_loss = float(epoch_loss_sum)
+    total_examples = int(epoch_examples)
 
     use_amp = device.type == "cuda"
 
@@ -158,6 +161,8 @@ def train_one_epoch(
                 best_val_loss=best_val_loss,
                 train_sampler=train_sampler,
                 output_dir=output_dir,
+                epoch_loss_sum=total_loss,
+                epoch_examples=total_examples,
             )
 
     if total_examples == 0:
@@ -214,6 +219,8 @@ def save_checkpoint(
     train_sampler,
     output_dir,
     filename=LATEST_CHECKPOINT_NAME,
+    epoch_loss_sum=0.0,
+    epoch_examples=0,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -231,6 +238,8 @@ def save_checkpoint(
 
         # Experiment state
         "best_val_loss": best_val_loss,
+        "epoch_loss_sum": float(epoch_loss_sum),
+        "epoch_examples": int(epoch_examples),
 
         # Sampler state (reproducible data order)
         "sampler_state_dict": train_sampler.state_dict(),
@@ -340,6 +349,8 @@ def load_checkpoint(
         "batch_position": checkpoint["batch_position"],
         "global_step": checkpoint["global_step"],
         "best_val_loss": checkpoint["best_val_loss"],
+        "epoch_loss_sum": checkpoint.get("epoch_loss_sum", 0.0),
+        "epoch_examples": checkpoint.get("epoch_examples", 0),
     }    
 def train_model(
     model,
@@ -375,6 +386,8 @@ def train_model(
     best_val_loss = float("inf")
     global_step = 0
     start_epoch = 0
+    epoch_loss_sum = 0.0
+    epoch_examples = 0
     history = []
 
     # Resume from an existing checkpoint if requested.
@@ -394,6 +407,8 @@ def train_model(
         start_epoch = resume_state["epoch"]
         global_step = resume_state["global_step"]
         best_val_loss = resume_state["best_val_loss"]
+        epoch_loss_sum = resume_state["epoch_loss_sum"]
+        epoch_examples = resume_state["epoch_examples"]
 
         print(
             f"Resuming at epoch {start_epoch + 1}, "
@@ -416,7 +431,14 @@ def train_model(
             output_dir=output_dir,
             epoch=epoch,
             best_val_loss=best_val_loss,
+            epoch_loss_sum=epoch_loss_sum,
+            epoch_examples=epoch_examples,
         )
+
+        # The epoch is now complete; its accumulators are no longer needed
+        # for a subsequent epoch-boundary checkpoint.
+        epoch_loss_sum = 0.0
+        epoch_examples = 0
 
         val_loss = validate_one_epoch(
             model,
@@ -452,6 +474,8 @@ def train_model(
                 train_sampler=train_sampler,
                 output_dir=output_dir,
                 filename=BEST_CHECKPOINT_NAME,
+                epoch_loss_sum=0.0,
+                epoch_examples=0,
             )
 
             print("New best validation checkpoint saved.")
@@ -469,6 +493,8 @@ def train_model(
             train_sampler=train_sampler,
             output_dir=output_dir,
             filename=LATEST_CHECKPOINT_NAME,
+            epoch_loss_sum=0.0,
+            epoch_examples=0,
         )
 
     return {
