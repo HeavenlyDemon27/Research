@@ -79,3 +79,50 @@ def initialize_student_from_teacher(teacher_model, student_model):
     student_model.tie_weights()
 
     return student_model
+def load_teacher_model(model_name="facebook/bart-large-cnn"):
+    """
+    Load the pretrained BART teacher.
+
+    The teacher is used only to generate soft targets during
+    knowledge distillation.
+    """
+
+    teacher_model = BartForConditionalGeneration.from_pretrained(
+        model_name
+    )
+
+    return teacher_model
+
+
+def prepare_kd_models(teacher_model):
+    """
+    Prepare the frozen teacher and freshly initialized student for E2.
+
+    Returns:
+        teacher_model: Frozen pretrained BART teacher.
+        student_model: Trainable Mini-BART student.
+    """
+
+    # 1. Freeze the teacher completely.
+    teacher_model.eval()
+
+    for parameter in teacher_model.parameters():
+        parameter.requires_grad = False
+
+    # 2. Create a fresh Mini-BART student.
+    student_model = build_student_model(teacher_model)
+
+    # 3. Initialize student using selected teacher weights.
+    student_model = initialize_student_from_teacher(
+        teacher_model,
+        student_model,
+    )
+
+    # 4. Ensure every student parameter is trainable.
+    for parameter in student_model.parameters():
+        parameter.requires_grad = True
+
+    # Student starts in training mode.
+    student_model.train()
+
+    return teacher_model, student_model
