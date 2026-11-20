@@ -77,6 +77,7 @@ def train_one_epoch(
     best_val_loss=float("inf"),
     epoch_loss_sum=0.0,
     epoch_examples=0,
+    history=None,
 ):
     model.train()
 
@@ -163,6 +164,7 @@ def train_one_epoch(
                 output_dir=output_dir,
                 epoch_loss_sum=total_loss,
                 epoch_examples=total_examples,
+                history=history,
             )
 
     if total_examples == 0:
@@ -221,6 +223,7 @@ def save_checkpoint(
     filename=LATEST_CHECKPOINT_NAME,
     epoch_loss_sum=0.0,
     epoch_examples=0,
+    history=None,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -240,6 +243,7 @@ def save_checkpoint(
         "best_val_loss": best_val_loss,
         "epoch_loss_sum": float(epoch_loss_sum),
         "epoch_examples": int(epoch_examples),
+        "history": list(history or []),
 
         # Sampler state (reproducible data order)
         "sampler_state_dict": train_sampler.state_dict(),
@@ -351,6 +355,7 @@ def load_checkpoint(
         "best_val_loss": checkpoint["best_val_loss"],
         "epoch_loss_sum": checkpoint.get("epoch_loss_sum", 0.0),
         "epoch_examples": checkpoint.get("epoch_examples", 0),
+        "history": checkpoint.get("history", []),
     }    
 def train_model(
     model,
@@ -409,6 +414,7 @@ def train_model(
         best_val_loss = resume_state["best_val_loss"]
         epoch_loss_sum = resume_state["epoch_loss_sum"]
         epoch_examples = resume_state["epoch_examples"]
+        history = resume_state["history"]
 
         print(
             f"Resuming at epoch {start_epoch + 1}, "
@@ -433,6 +439,7 @@ def train_model(
             best_val_loss=best_val_loss,
             epoch_loss_sum=epoch_loss_sum,
             epoch_examples=epoch_examples,
+            history=history,
         )
 
         # The epoch is now complete; its accumulators are no longer needed
@@ -476,6 +483,7 @@ def train_model(
                 filename=BEST_CHECKPOINT_NAME,
                 epoch_loss_sum=0.0,
                 epoch_examples=0,
+                history=history,
             )
 
             print("New best validation checkpoint saved.")
@@ -495,6 +503,7 @@ def train_model(
             filename=LATEST_CHECKPOINT_NAME,
             epoch_loss_sum=0.0,
             epoch_examples=0,
+            history=history,
         )
 
     return {
