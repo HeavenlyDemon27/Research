@@ -96,3 +96,32 @@ def compute_rouge(predictions, references, use_stemmer=True):
         references=references,
         use_stemmer=use_stemmer
     )
+def extractive_fragment_metrics(source, summary):
+    """Greedy longest-match fragment coverage and density, at token level."""
+    src, summ = tokenize(source), tokenize(summary)
+    if not src or not summ:
+        return {"coverage": 0.0, "density": 0.0, "fragment_count": 0}
+    fragments = []
+    cursor = 0
+    while cursor < len(summ):
+        longest = 0
+        for start in range(len(src)):
+            match = 0
+            while (cursor + match < len(summ) and start + match < len(src)
+                   and summ[cursor + match] == src[start + match]):
+                match += 1
+            longest = max(longest, match)
+        if longest:
+            fragments.append(longest)
+            cursor += longest
+        else:
+            cursor += 1
+    return {
+        "coverage": sum(fragments) / len(summ),
+        "density": sum(length * length for length in fragments) / len(summ),
+        "fragment_count": len(fragments),
+    }
+
+def compression_ratio(source, summary):
+    source_len, summary_len = len(tokenize(source)), len(tokenize(summary))
+    return summary_len / source_len if source_len else 0.0

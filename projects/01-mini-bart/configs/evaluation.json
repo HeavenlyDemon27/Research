@@ -1,0 +1,16 @@
+{
+  "model_name": "facebook/bart-large-cnn",
+  "dataset_name": "abisee/cnn_dailymail",
+  "dataset_version": "3.0.0",
+  "batch_size": 8,
+  "output_dir": "outputs/evaluation",
+  "generation": {
+    "num_beams": 4,
+    "max_new_tokens": 128,
+    "min_new_tokens": 0,
+    "length_penalty": 1.0,
+    "no_repeat_ngram_size": 3,
+    "do_sample": false,
+    "early_stopping": true
+  }
+}
