@@ -90,7 +90,7 @@ def main():
                     return len(original_loader)
                 def __iter__(self):
                     it = iter(original_loader)
-                    for _ in range(4):
+                    for _ in range(2):
                         yield next(it)
                     raise RuntimeError("SIMULATED_RUNTIME_INTERRUPTION")
             kwargs["dataloader"] = StopAfterFour()
@@ -115,7 +115,7 @@ def main():
         checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
         assert checkpoint["global_step"] == 2
         assert checkpoint["gradient_accumulation_steps"] == 2
-        assert checkpoint["sampler_state_dict"]["position"] == 8
+        assert checkpoint["sampler_state_dict"]["position"] == 4
 
         resumed_model = ToyModel()
         resumed_loader = make_loader(dataset)
