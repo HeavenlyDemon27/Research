@@ -67,7 +67,7 @@ def run_full(dataset, out_dir):
     return model, result
 
 
-def main():
+def test_interrupted_resume_matches_uninterrupted_training():
     dataset = ToyDataset()
     train_module.CHECKPOINT_EVERY_STEPS = 2
 
@@ -132,6 +132,3 @@ def main():
         print("Optimizer updates:", full_result["global_step"])
         print("Final model parameters and history match exactly.")
 
-
-if __name__ == "__main__":
-    main()
