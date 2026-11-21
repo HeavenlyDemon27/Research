@@ -1,9 +1,9 @@
 """Dataset loading and preprocessing (implementation to follow)."""
 #  Important design decisions understand these choices:
 # Parameter	                   Initial value	         Purpose
-# Input max length	              1024	                 Maximum article tokens
+# Input max length	              512	                 Maximum article tokens
 # Target max length	               128	                 Maximum summary tokens
-# Batch size	                     2	                 Initial GPU-memory-friendly setting
+# Batch size	                     1	                 Initial GPU-memory-friendly setting
 # Padding	                   Dynamic	                 Pad sequences to batch length
 # Label padding	                  -100	                 Ignore padded positions in loss
 
@@ -20,7 +20,7 @@
 #Therefore, our data collator pads labels with -100, and those positions are ignored when calculating the loss.
 
 #C)DYNAMIC PADDING
-#We don't want every example to be padded to 1024 tokens regardless of its length
+#We don't want every example to be padded to 512 tokens regardless of its length
 #Instead, we pad each batch only to the longest sequence in that batch. This saves GPU memory and computation
 
 
