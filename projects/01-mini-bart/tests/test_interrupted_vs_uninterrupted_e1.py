@@ -25,7 +25,7 @@ class ToyDataset(Dataset):
                 "labels": torch.randint(0, 10, (5,), generator=g),
             }
             for _ in range(16)
-        }
+        ]
 
     def __len__(self):
         return len(self.rows)
