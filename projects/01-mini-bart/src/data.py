@@ -141,10 +141,11 @@ def prepare_dataset(
     max_test_samples=None,
 ):
     """
-    Tokenize every split supplied by the caller.
+    Tokenize supplied splits.
 
-    Train and validation are required. Test is optional and is only
-    processed if it is explicitly present in the supplied DatasetDict.
+    Train and validation are required. Test is optional; if absent, an
+    empty test split is added for compatibility with existing notebooks.
+    A sample limit of zero intentionally creates an empty split.
     """
     if "train" not in dataset or "validation" not in dataset:
         raise KeyError("Dataset must contain 'train' and 'validation' splits.")
@@ -159,8 +160,8 @@ def prepare_dataset(
     for split, split_data in dataset.items():
         limit = sample_limits.get(split)
         if limit is not None:
-            if limit < 1:
-                raise ValueError(f"{split} sample limit must be >= 1.")
+            if limit < 0:
+                raise ValueError(f"{split} sample limit cannot be negative.")
             split_data = split_data.select(
                 range(min(limit, len(split_data)))
             )
@@ -171,6 +172,11 @@ def prepare_dataset(
             remove_columns=split_data.column_names,
             desc=f"Tokenizing {split} split",
         )
+
+    # Preserve the notebook's three-split interface without loading,
+    # tokenizing, or evaluating any test examples.
+    if "test" not in tokenized_dataset:
+        tokenized_dataset["test"] = tokenized_dataset["validation"].select([])
 
     return tokenized_dataset
 
@@ -238,11 +244,10 @@ def create_dataloaders(
     num_workers=0,
 ):
     """
-    Create train/validation loaders and an optional test loader.
+    Create train/validation/test loaders.
 
-    Returns a three-item tuple for backward compatibility:
-    (train_loader, val_loader, test_loader). test_loader is None when
-    the test split was intentionally not loaded.
+    Returns a three-item tuple for backward compatibility. If no real test
+    split is supplied, test_loader wraps an empty view of validation.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
@@ -278,15 +283,16 @@ def create_dataloaders(
         pin_memory=pin_memory,
     )
 
-    test_loader = None
-    if "test" in tokenized_dataset:
-        test_loader = DataLoader(
-            tokenized_dataset["test"],
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=collator,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        )
+    test_dataset = tokenized_dataset.get(
+        "test", tokenized_dataset["validation"].select([])
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collator,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
     return train_loader, val_loader, test_loader
