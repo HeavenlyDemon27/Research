@@ -84,16 +84,29 @@ def test_interrupted_resume_matches_uninterrupted_training():
         original_train_one_epoch = train_module.train_one_epoch
 
         def interrupt_after_four_microbatches(*args, **kwargs):
-            original_loader = kwargs["dataloader"]
+            # train_model passes dataloader as the second positional argument.
+            original_loader = kwargs.get("dataloader")
+            if original_loader is None:
+                original_loader = args[1]
+
             class StopAfterFour:
                 def __len__(self):
                     return len(original_loader)
+
                 def __iter__(self):
                     it = iter(original_loader)
-                    for _ in range(2):
+                    for _ in range(4):
                         yield next(it)
                     raise RuntimeError("SIMULATED_RUNTIME_INTERRUPTION")
-            kwargs["dataloader"] = StopAfterFour()
+
+            # Replace the positional argument without changing the call contract.
+            if "dataloader" in kwargs:
+                kwargs["dataloader"] = StopAfterFour()
+            else:
+                args = list(args)
+                args[1] = StopAfterFour()
+                args = tuple(args)
+
             return original_train_one_epoch(*args, **kwargs)
 
         train_module.train_one_epoch = interrupt_after_four_microbatches
@@ -115,7 +128,7 @@ def test_interrupted_resume_matches_uninterrupted_training():
         checkpoint = torch.load(latest, map_location="cpu", weights_only=False)
         assert checkpoint["global_step"] == 2
         assert checkpoint["gradient_accumulation_steps"] == 2
-        assert checkpoint["sampler_state_dict"]["position"] == 4
+        assert checkpoint["sampler_state_dict"]["position"] == 8
 
         resumed_model = ToyModel()
         resumed_loader = make_loader(dataset)
