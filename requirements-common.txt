@@ -1,0 +1,12 @@
+# Shared research-code dependencies for Mini-BART and future projects.
+# Intentionally does NOT pin torch: GPU/CPU builds are environment-managed.
+transformers==5.20.2
+datasets==4.8.5
+accelerate==1.15.0
+evaluate==0.4.6
+numpy==2.1.3
+pyarrow==23.0.1
+tokenizers==0.23.3
+rouge-score==0.1.2
+tensorboard==2.21.0
+tqdm==4.67.3

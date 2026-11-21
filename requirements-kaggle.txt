@@ -1,0 +1,3 @@
+# Kaggle environment: install shared research dependencies.
+# Keep PyTorch/CUDA versions managed by Kaggle unless a project-specific need is verified.
+-r requirements-common.txt
