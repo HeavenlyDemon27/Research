@@ -41,9 +41,9 @@ MODEL_NAME = "facebook/bart-large-cnn"
 DATASET_NAME = "abisee/cnn_dailymail"
 DATASET_VERSION = "3.0.0"
 
-MAX_INPUT_LENGTH = 1024
+MAX_INPUT_LENGTH = 512
 MAX_TARGET_LENGTH = 128
-BATCH_SIZE = 2
+BATCH_SIZE = 1
 class JsonSummarizationDataset(Dataset):
 
     def __init__(
