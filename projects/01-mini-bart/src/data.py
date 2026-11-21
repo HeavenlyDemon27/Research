@@ -283,9 +283,10 @@ def create_dataloaders(
         pin_memory=pin_memory,
     )
 
-    test_dataset = tokenized_dataset.get(
-        "test", tokenized_dataset["validation"].select([])
-    )
+    if "test" in tokenized_dataset:
+        test_dataset = tokenized_dataset["test"]
+    else:
+        test_dataset = tokenized_dataset["validation"].select([])
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
