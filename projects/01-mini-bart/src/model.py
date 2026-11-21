@@ -93,8 +93,8 @@ def load_teacher_model(model_name="facebook/bart-large-cnn"):
     """
     Load the pretrained BART teacher.
 
-    The teacher is used only to generate soft targets during
-    knowledge distillation.
+    The pretrained teacher supplies E1 student initialization and E2
+    teacher targets during knowledge distillation.
     """
 
     teacher_model = BartForConditionalGeneration.from_pretrained(
