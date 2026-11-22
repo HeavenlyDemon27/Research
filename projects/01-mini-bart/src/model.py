@@ -79,12 +79,22 @@ def initialize_student_from_teacher(teacher_model, student_model):
     student_model.tie_weights()
 
     return student_model
+def prepare_e1_student(teacher_model):
+    """Create a fresh E1 student initialized from teacher layers [0,2,4,6,8,10]."""
+    student_model = build_student_model(teacher_model)
+    student_model = initialize_student_from_teacher(teacher_model, student_model)
+    for parameter in student_model.parameters():
+        parameter.requires_grad = True
+    student_model.train()
+    return student_model
+
+
 def load_teacher_model(model_name="facebook/bart-large-cnn"):
     """
     Load the pretrained BART teacher.
 
-    The teacher is used only to generate soft targets during
-    knowledge distillation.
+    The pretrained teacher supplies E1 student initialization and E2
+    teacher targets during knowledge distillation.
     """
 
     teacher_model = BartForConditionalGeneration.from_pretrained(

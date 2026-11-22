@@ -1,50 +1,23 @@
-"""Dataset loading and preprocessing (implementation to follow)."""
-#  Important design decisions understand these choices:
-# Parameter	                   Initial value	         Purpose
-# Input max length	              1024	                 Maximum article tokens
-# Target max length	               128	                 Maximum summary tokens
-# Batch size	                     2	                 Initial GPU-memory-friendly setting
-# Padding	                   Dynamic	                 Pad sequences to batch length
-# Label padding	                  -100	                 Ignore padded positions in loss
+"""Dataset loading, tokenization, and PyTorch DataLoaders for Mini-BART."""
 
-#A) ATTENTION MASK: 
-#2 article with different len. Article 1: [12, 45, 78, 91] & Article 2: [23, 56]
-#to batch them together we pad shorter sequence : Article 2: [23, 56,  1,  1]
-#Attention mask become: Article 1: [1, 1, 1, 1]  Article 2: [1, 1, 0, 0], where 1=actual token and 0=padding token
-#The model uses this mask to avoid attending to padding positions in the encoder input
-
-
-#B)Why I use -100 labels for? 
-#imp. pytorch concept, our L. function will use cross-entropy: L_ce= -logP(y_correct)
-#we dont padding positions to contribute to loss, PyTorch's CrossEntropyLoss supports ignore_index=-100
-#Therefore, our data collator pads labels with -100, and those positions are ignored when calculating the loss.
-
-#C)DYNAMIC PADDING
-#We don't want every example to be padded to 1024 tokens regardless of its length
-#Instead, we pad each batch only to the longest sequence in that batch. This saves GPU memory and computation
-
-
-from transformers import (
-    AutoTokenizer,
-    DataCollatorForSeq2Seq,
-)
 import json
-from torch.utils.data import Dataset, DataLoader, Sampler
+
 import torch
+from torch.utils.data import Dataset, DataLoader, Sampler
+from transformers import AutoTokenizer, DataCollatorForSeq2Seq
 
-
-# --------------------------------------------------
-# 1. Configuration
-# --------------------------------------------------
 
 MODEL_NAME = "facebook/bart-large-cnn"
 DATASET_NAME = "abisee/cnn_dailymail"
 DATASET_VERSION = "3.0.0"
 
-MAX_INPUT_LENGTH = 1024
+MAX_INPUT_LENGTH = 512
 MAX_TARGET_LENGTH = 128
-BATCH_SIZE = 2
+BATCH_SIZE = 1
+
+
 class JsonSummarizationDataset(Dataset):
+    """Small JSON-backed dataset used for smoke tests."""
 
     def __init__(
         self,
@@ -63,27 +36,32 @@ class JsonSummarizationDataset(Dataset):
 
     def __getitem__(self, idx):
         record = self.records[idx]
-
-        article = record["article"]
-        summary = record["highlights"]
-
         inputs = self.tokenizer(
-            article,
+            record["article"],
             max_length=self.max_input_length,
             truncation=True,
         )
-
         targets = self.tokenizer(
-            text_target=summary,
+            text_target=record["highlights"],
             max_length=self.max_target_length,
             truncation=True,
         )
-
         return {
             "input_ids": inputs["input_ids"],
             "attention_mask": inputs["attention_mask"],
             "labels": targets["input_ids"],
         }
+
+
+def _make_collator(tokenizer):
+    return DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=None,
+        padding=True,
+        label_pad_token_id=-100,
+        return_tensors="pt",
+    )
+
 
 def create_json_dataloader(
     json_path,
@@ -92,73 +70,47 @@ def create_json_dataloader(
     shuffle=False,
     num_workers=0,
 ):
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
     with open(json_path, "r", encoding="utf-8") as f:
         records = json.load(f)
 
-    dataset = JsonSummarizationDataset(
-        records=records,
-        tokenizer=tokenizer,
-    )
-
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        model=None,
-        padding=True,
-        label_pad_token_id=-100,
-        return_tensors="pt",
-    )
-
-    dataloader = DataLoader(
+    dataset = JsonSummarizationDataset(records=records, tokenizer=tokenizer)
+    return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        collate_fn=data_collator,
+        collate_fn=_make_collator(tokenizer),
         num_workers=num_workers,
     )
 
-    return dataloader
-# --------------------------------------------------
-# 2. Load tokenizer
-# --------------------------------------------------
 
-def load_bart_tokenizer(model_name=MODEL_NAME): 
- #We load the tokenizer belonging to facebook/bart-large-cnn, 
- #why?Because our teacher and student share the same vocabulary and token-ID mapping. 
- # This is also essential when I(or you,the viewer) implement KD later: both models must interpret token IDs consistently
+def load_bart_tokenizer(model_name=MODEL_NAME):
+    """Load the tokenizer shared by the BART teacher and student."""
+    return AutoTokenizer.from_pretrained(model_name, use_fast=True)
+
+
+def load_cnn_dailymail(include_test=False):
     """
-    Load the tokenizer associated with BART.
+    Load CNN/DailyMail 3.0.0.
+
+    The test split is deliberately excluded by default so it remains held
+    out for final evaluation. Set include_test=True only for that stage.
     """
+    from datasets import DatasetDict, load_dataset
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    splits = {
+        "train": load_dataset(DATASET_NAME, DATASET_VERSION, split="train"),
+        "validation": load_dataset(
+            DATASET_NAME, DATASET_VERSION, split="validation"
+        ),
+    }
+    if include_test:
+        splits["test"] = load_dataset(
+            DATASET_NAME, DATASET_VERSION, split="test"
+        )
+    return DatasetDict(splits)
 
-    return tokenizer
-
-
-# --------------------------------------------------
-# 3. Load CNN/DailyMail
-# --------------------------------------------------
-
-def load_cnn_dailymail(): 
- #Loads three splits: train, value, validation/cross-validation.
- #Train	Update student weights
- #Validation	Monitor performance and select checkpoints
- #Test	Final evaluation
-
-    """
-    Load train, validation and test splits.
-    """
-    from datasets import load_dataset
-    dataset = load_dataset(
-        DATASET_NAME,
-        DATASET_VERSION
-    )
-
-    return dataset
-
-
-# --------------------------------------------------
-# 4. Tokenize articles and reference summaries
-# --------------------------------------------------
 
 def preprocess_function(
     examples,
@@ -166,36 +118,20 @@ def preprocess_function(
     max_input_length=MAX_INPUT_LENGTH,
     max_target_length=MAX_TARGET_LENGTH,
 ):
-  #This is where text becomes numbers. 
-  # ex: [OG ARTICLE]The government announced a new policy on Monday -->[tokenizer]0 245 918 32(illustrive token IDs)-->[input tensor]A numerical sequence that BART can process.
-  #We tokenize the article and summary separately.
-  #The article becomes input_ids, while the reference summary becomes labels
-    """
-    Convert articles and summaries into token IDs.
-    """
-
-    # Tokenize input articles
+    """Tokenize article inputs and reference summaries."""
     model_inputs = tokenizer(
         examples["article"],
         max_length=max_input_length,
         truncation=True,
     )
-
-    # Tokenize reference summaries
     labels = tokenizer(
         text_target=examples["highlights"],
         max_length=max_target_length,
         truncation=True,
     )
-
     model_inputs["labels"] = labels["input_ids"]
-
     return model_inputs
 
-
-# --------------------------------------------------
-# 5. Prepare tokenized dataset
-# --------------------------------------------------
 
 def prepare_dataset(
     dataset,
@@ -205,57 +141,52 @@ def prepare_dataset(
     max_test_samples=None,
 ):
     """
-    Tokenize all dataset splits.
+    Tokenize supplied splits.
 
-    Optional sample limits are useful for debugging.
+    Train and validation are required. Test is optional; if absent, an
+    empty test split is added for compatibility with existing notebooks.
+    A sample limit of zero intentionally creates an empty split.
     """
+    if "train" not in dataset or "validation" not in dataset:
+        raise KeyError("Dataset must contain 'train' and 'validation' splits.")
 
     sample_limits = {
         "train": max_train_samples,
         "validation": max_val_samples,
         "test": max_test_samples,
     }
-
     tokenized_dataset = {}
 
-    for split, data in dataset.items():
-
-        # Optional subset for debugging
-        limit = sample_limits[split]
-
+    for split, split_data in dataset.items():
+        limit = sample_limits.get(split)
         if limit is not None:
-            data = data.select(
-                range(min(limit, len(data)))
+            if limit < 0:
+                raise ValueError(f"{split} sample limit cannot be negative.")
+            split_data = split_data.select(
+                range(min(limit, len(split_data)))
             )
 
-        # Tokenize the split
-        tokenized_dataset[split] = data.map(
-            lambda examples: preprocess_function(
-                examples,
-                tokenizer
-            ),
+        tokenized_dataset[split] = split_data.map(
+            lambda examples: preprocess_function(examples, tokenizer),
             batched=True,
-            remove_columns=data.column_names,
+            remove_columns=split_data.column_names,
             desc=f"Tokenizing {split} split",
         )
+
+    # Preserve the notebook's three-split interface without loading,
+    # tokenizing, or evaluating any test examples.
+    if "test" not in tokenized_dataset:
+        tokenized_dataset["test"] = tokenized_dataset["validation"].select([])
 
     return tokenized_dataset
 
 
-# --------------------------------------------------
-# 6. Create PyTorch DataLoaders
-# --------------------------------------------------
-
 class StatefulRandomSampler(Sampler):
-    """
-    Random sampler that preserves its permutation and current position,
-    allowing training to resume partway through an epoch.
-    """
+    """Random sampler that can resume from an exact sample position."""
 
     def __init__(self, data_source, generator=None):
         self.data_source = data_source
-        self.generator = generator or torch.Generator()
-
+        self.generator = generator if generator is not None else torch.Generator()
         self.permutation = None
         self.position = 0
         self.epoch = 0
@@ -291,10 +222,20 @@ class StatefulRandomSampler(Sampler):
         }
 
     def load_state_dict(self, state):
+        permutation = state["permutation"]
+        position = int(state["position"])
+        if permutation is not None:
+            if len(permutation) != len(self.data_source):
+                raise ValueError(
+                    "Sampler checkpoint dataset size does not match the current dataset."
+                )
+            if not 0 <= position <= len(permutation):
+                raise ValueError("Sampler checkpoint position is invalid.")
         self.generator.set_state(state["generator_state"])
-        self.permutation = state["permutation"]
-        self.position = state["position"]
-        self.epoch = state["epoch"]
+        self.permutation = permutation
+        self.position = position
+        self.epoch = int(state["epoch"])
+
 
 def create_dataloaders(
     tokenized_dataset,
@@ -302,53 +243,57 @@ def create_dataloaders(
     batch_size=BATCH_SIZE,
     num_workers=0,
 ):
- #This converts our tokenized datasets into batches of PyTorch tensors.
- #For instance, with batch size 2: input_IDS : [2,1024] labels:[2,128]
- #These are illustrative maximum dimensions. 
- #With dynamic padding, the actual sequence dimensions will depend on the longest example in each batch.
     """
-    Convert tokenized datasets into PyTorch DataLoaders.
-    """
+    Create train/validation/test loaders.
 
-    # Dynamically pad sequences within each batch.
-    # Padded label positions receive -100.
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        model=None,
-        padding=True,
-        label_pad_token_id=-100,
-        return_tensors="pt",
-    )
+    Returns a three-item tuple for backward compatibility. If no real test
+    split is supplied, test_loader wraps an empty view of validation.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    if num_workers < 0:
+        raise ValueError("num_workers cannot be negative")
+    if "train" not in tokenized_dataset or "validation" not in tokenized_dataset:
+        raise KeyError(
+            "Tokenized dataset must contain 'train' and 'validation' splits."
+        )
+
+    collator = _make_collator(tokenizer)
+    pin_memory = torch.cuda.is_available()
+
     train_sampler = StatefulRandomSampler(
-       tokenized_dataset["train"],
-       generator=torch.Generator().manual_seed(42),
+        tokenized_dataset["train"],
+        generator=torch.Generator().manual_seed(42),
     )
     train_loader = DataLoader(
         tokenized_dataset["train"],
         batch_size=batch_size,
         sampler=train_sampler,
-        collate_fn=data_collator,
+        collate_fn=collator,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
         generator=torch.Generator().manual_seed(123),
     )
-
     val_loader = DataLoader(
         tokenized_dataset["validation"],
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=data_collator,
+        collate_fn=collator,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
     )
 
+    if "test" in tokenized_dataset:
+        test_dataset = tokenized_dataset["test"]
+    else:
+        test_dataset = tokenized_dataset["validation"].select([])
     test_loader = DataLoader(
-        tokenized_dataset["test"],
+        test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=data_collator,
+        collate_fn=collator,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
     )
 
     return train_loader, val_loader, test_loader
