@@ -77,6 +77,10 @@ def build_evaluation_model(experiment, pretrained_model_name, checkpoint_path, d
         model = teacher
     else:
         model = build_student_model(teacher)
+        import copy
+        model.generation_config = copy.deepcopy(
+            teacher.generation_config
+    )
         if not checkpoint_path:
             raise ValueError(f"--checkpoint is required for {experiment}.")
 
