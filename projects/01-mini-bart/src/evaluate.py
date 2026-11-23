@@ -183,7 +183,7 @@ def evaluate_model(model_name, checkpoint_path, config, output_dir, max_examples
                 decoded = tokenizer.batch_decode(
                     generated,
                     skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True,
+                    clean_up_tokenization_spaces=False,
                 )
 
                 batch_rows = [
