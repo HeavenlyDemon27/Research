@@ -59,16 +59,53 @@ def compute_source_overlap(sources, summaries, n_values=(1, 2, 4)):
     results = {}
 
     for n in n_values:
-        rates = [
-            source_overlap(source, summary, n)
-            for source, summary in zip(sources, summaries)
-        ]
+        if not isinstance(n, int) or n < 1:
+            raise ValueError("Every n-gram size must be a positive integer.")
 
-        avg_copy = sum(rates) / len(rates)
+        document_rates = []
+        total_ngrams = 0
+        total_copied = 0
+        empty_documents = 0
+
+        for source, summary in zip(sources, summaries):
+            source_tokens = tokenize(source)
+            summary_tokens = tokenize(summary)
+
+            source_ngrams = set(get_ngrams(source_tokens, n))
+            summary_ngrams = get_ngrams(summary_tokens, n)
+
+            if not summary_ngrams:
+                empty_documents += 1
+                continue
+
+            copied = sum(
+                gram in source_ngrams for gram in summary_ngrams
+            )
+
+            document_rates.append(copied / len(summary_ngrams))
+            total_copied += copied
+            total_ngrams += len(summary_ngrams)
+
+        macro_copy = (
+            sum(document_rates) / len(document_rates)
+            if document_rates else None
+        )
+
+        micro_copy = (
+            total_copied / total_ngrams
+            if total_ngrams else None
+        )
 
         results[f"{n}-gram"] = {
-            "copy_rate": avg_copy,
-            "novel_rate": 1.0 - avg_copy
+            "macro_copy_rate": macro_copy,
+            "macro_novel_rate": (
+                1 - macro_copy if macro_copy is not None else None
+            ),
+            "micro_copy_rate": micro_copy,
+            "micro_novel_rate": (
+                1 - micro_copy if micro_copy is not None else None
+            ),
+            "empty_summary_count": empty_documents,
         }
 
     return results

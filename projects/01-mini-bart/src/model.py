@@ -77,12 +77,32 @@ def initialize_student_from_teacher(teacher_model, student_model):
 
     # Preserve BART's shared embedding / LM head weight tying.
     student_model.tie_weights()
+def verify_student_architecture(teacher_model, student_model):
+    assert len(student_model.model.encoder.layers) == 6
+    assert len(student_model.model.decoder.layers) == 6
 
+    assert (
+        student_model.model.shared.weight.data_ptr()
+        == student_model.lm_head.weight.data_ptr()
+    ), "Student token embeddings and LM head are not tied."
+
+    assert (
+        student_model.config.d_model == teacher_model.config.d_model
+    )
+
+    assert (
+        student_model.config.vocab_size == teacher_model.config.vocab_size
+    )
+
+    print("Student architecture verified: 6E + 6D")
+    print("Embedding/LM-head weight tying verified.")
     return student_model
+
 def prepare_e1_student(teacher_model):
     """Create a fresh E1 student initialized from teacher layers [0,2,4,6,8,10]."""
     student_model = build_student_model(teacher_model)
     student_model = initialize_student_from_teacher(teacher_model, student_model)
+    verify_student_architecture(teacher_model, student_model)
     for parameter in student_model.parameters():
         parameter.requires_grad = True
     student_model.train()
@@ -127,7 +147,7 @@ def prepare_kd_models(teacher_model):
         teacher_model,
         student_model,
     )
-
+    verify_student_architecture(teacher_model, student_model)
     # 4. Ensure every student parameter is trainable.
     for parameter in student_model.parameters():
         parameter.requires_grad = True

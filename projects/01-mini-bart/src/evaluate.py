@@ -134,7 +134,10 @@ def evaluate_model(model_name, checkpoint_path, config, output_dir, max_examples
     tokenizer = load_bart_tokenizer(config["model_name"])
 
     print(f"Loading CNN/DailyMail {DATASET_VERSION} test split...")
-    raw_dataset = load_cnn_dailymail()
+    raw_dataset = load_cnn_dailymail(include_test=True)
+    assert len(raw_dataset["test"]) == 11_490, (
+       f"Expected 11,490 test examples, got {len(raw_dataset['test'])}"
+)
     raw_test, test_loader = build_test_loader(
         raw_dataset["test"],
         tokenizer,
