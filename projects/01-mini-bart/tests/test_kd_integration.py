@@ -183,6 +183,8 @@ def test_e2_end_to_end_training_and_mid_epoch_resume(
             temperature=2.0,
             lambda_kd=0.5,
             checkpoint_every_steps=1,
+        gradient_accumulation_steps=2,
+            gradient_accumulation_steps=2,
         )
 
     latest_path = tmp_path / "latest_kd_checkpoint.pt"
@@ -201,7 +203,7 @@ def test_e2_end_to_end_training_and_mid_epoch_resume(
     sampler_state = mid_epoch_checkpoint["sampler_state_dict"]
 
     assert sampler_state["permutation"] is not None
-    assert sampler_state["position"] == 2
+    assert sampler_state["position"] == 4
 
     # Teacher must already have been frozen by train_kd_model.
     assert all(
@@ -243,13 +245,14 @@ def test_e2_end_to_end_training_and_mid_epoch_resume(
         lambda_kd=0.5,
         resume_from=str(latest_path),
         checkpoint_every_steps=1,
+        gradient_accumulation_steps=2,
     )
 
     # --------------------------------------------------------
     # D. Verify training completed
     # --------------------------------------------------------
 
-    assert results["global_step"] == 8
+    assert results["global_step"] == 4
     assert len(results["history"]) == 2
 
     assert results["best_val_loss"] < float("inf")
@@ -344,4 +347,4 @@ def test_e2_end_to_end_training_and_mid_epoch_resume(
     # --------------------------------------------------------
 
     assert latest_checkpoint["epoch"] == 2
-    assert latest_checkpoint["global_step"] == 8
+    assert latest_checkpoint["global_step"] == 4
