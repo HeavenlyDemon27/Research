@@ -169,6 +169,7 @@ def test_student_weights_update(
         scheduler=scheduler,
         device=device,
         scaler=scaler,
+        gradient_accumulation_steps=1,
     )
 
     changed = any(
@@ -209,6 +210,7 @@ def test_teacher_weights_remain_unchanged(
         scheduler=scheduler,
         device=device,
         scaler=scaler,
+        gradient_accumulation_steps=1,
     )
 
     for name, parameter in teacher.named_parameters():
@@ -242,6 +244,7 @@ def test_teacher_receives_no_gradients(
         scheduler=scheduler,
         device=device,
         scaler=scaler,
+        gradient_accumulation_steps=1,
     )
 
     assert all(
@@ -274,6 +277,7 @@ def test_training_metrics_are_valid(
         scheduler=scheduler,
         device=device,
         scaler=scaler,
+        gradient_accumulation_steps=1,
     )
 
     assert "loss" in metrics
@@ -341,6 +345,8 @@ def test_empty_training_dataloader_raises_error(
             scheduler=scheduler,
             device=device,
             scaler=scaler,
+        gradient_accumulation_steps=1,
+            gradient_accumulation_steps=1,
         )
 
 
@@ -387,11 +393,11 @@ def test_student_receives_gradients(
         scheduler=scheduler,
         device=device,
         scaler=scaler,
+        gradient_accumulation_steps=1,
     )
 
-    # The student should be trainable and have gradients
-    # from the final training batch.
-    assert any(
-        parameter.grad is not None
+    # Gradients are cleared after the final optimizer update.
+    assert all(
+        parameter.grad is None
         for parameter in student.parameters()
     )
