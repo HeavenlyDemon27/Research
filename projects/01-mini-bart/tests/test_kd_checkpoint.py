@@ -177,6 +177,7 @@ def create_config():
         num_epochs=1,
         temperature=2.0,
         lambda_kd=0.5,
+        gradient_accumulation_steps=1,
     )
 
 
@@ -572,6 +573,7 @@ def run_uninterrupted_training():
         scheduler=scheduler,
         device=torch.device("cpu"),
         scaler=scaler,
+        gradient_accumulation_steps=1,
         global_step=0,
         checkpoint_every_steps=0,
     )
@@ -635,6 +637,7 @@ def run_interrupted_and_resumed_training(tmp_path):
             scheduler=scheduler,
             device=torch.device("cpu"),
             scaler=scaler,
+            gradient_accumulation_steps=1,
             global_step=0,
             checkpoint_callback=checkpoint_and_interrupt,
             checkpoint_every_steps=2,
@@ -686,6 +689,7 @@ def run_interrupted_and_resumed_training(tmp_path):
         scheduler=resumed_scheduler,
         device=torch.device("cpu"),
         scaler=resumed_scaler,
+        gradient_accumulation_steps=1,
         global_step=load_state["global_step"],
         checkpoint_every_steps=0,
     )

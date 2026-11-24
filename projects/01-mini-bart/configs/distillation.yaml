@@ -9,7 +9,7 @@ model:
   initialization: every_other_teacher_layer
 
 data:
-  dataset_id: cnn_dailymail
+  dataset_id: abisee/cnn_dailymail
   dataset_config: 3.0.0
   max_source_length: 512
   max_target_length: 128
@@ -22,7 +22,12 @@ distillation:
 
 training:
   learning_rate: 0.00005
+  weight_decay: 0.01
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   num_train_epochs: 1
+  warmup_ratio: 0.06
+  max_grad_norm: 1.0
+  checkpoint_every_optimizer_steps: 500
+  global_step_definition: successful_optimizer_updates
   seed: 42

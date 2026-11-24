@@ -27,7 +27,8 @@ from src.distillation import combined_distillation_loss
 
 KD_TEMPERATURE = 2.0
 KD_LAMBDA = 0.5
-KD_NUM_EPOCHS = 2
+KD_NUM_EPOCHS = 1
+KD_GRADIENT_ACCUMULATION_STEPS = 8
 
 KD_CHECKPOINT_DIR = "experiments/E2/checkpoints"
 
@@ -37,7 +38,14 @@ LATEST_CHECKPOINT_NAME = "latest_kd_checkpoint.pt"
 BEST_CHECKPOINT_NAME = "best_kd_checkpoint.pt"
 
 
-def get_kd_config(num_epochs, temperature, lambda_kd):
+def get_kd_config(
+    num_epochs,
+    temperature,
+    lambda_kd,
+    gradient_accumulation_steps=KD_GRADIENT_ACCUMULATION_STEPS,
+    checkpoint_every_steps=KD_CHECKPOINT_EVERY_STEPS,
+    per_device_train_batch_size=1,
+):
     """Return the experiment configuration saved in checkpoints."""
 
     return {
@@ -52,6 +60,15 @@ def get_kd_config(num_epochs, temperature, lambda_kd):
         "weight_decay": 0.01,
         "warmup_ratio": 0.06,
         "max_grad_norm": MAX_GRAD_NORM,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "checkpoint_every_steps": checkpoint_every_steps,
+        "global_step_definition": "successful_optimizer_updates",
+        "dataset": "abisee/cnn_dailymail",
+        "dataset_version": "3.0.0",
+        "max_input_length": 512,
+        "max_target_length": 128,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "seed": 42,
     }
 
 
@@ -132,6 +149,8 @@ def save_kd_checkpoint(
         "global_step": global_step,
         "best_val_loss": best_val_loss,
         "config": config,
+        "global_step_definition": "successful_optimizer_updates",
+        "gradient_accumulation_steps": config["gradient_accumulation_steps"],
     }
 
     if include_training_state:
@@ -323,32 +342,53 @@ def train_kd_one_epoch(
     lambda_kd=KD_LAMBDA,
     checkpoint_callback=None,
     checkpoint_every_steps=KD_CHECKPOINT_EVERY_STEPS,
+    gradient_accumulation_steps=KD_GRADIENT_ACCUMULATION_STEPS,
 ):
-    teacher.eval()
-    student.train()
+    """
+    Train one epoch using gradient accumulation.
 
+    global_step counts successful optimizer updates, never microbatches.
+    Checkpoints are requested only after an accumulation group has been
+    stepped (or AMP-skipped), gradients have been cleared, and the sampler
+    has consumed the complete group.
+    """
+    if gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be >= 1")
+    if checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps cannot be negative")
     if len(dataloader) == 0:
         raise ValueError("Training dataloader is empty.")
+
+    teacher.eval()
+    student.train()
 
     total_loss = 0.0
     total_ce_loss = 0.0
     total_kd_loss = 0.0
     total_examples = 0
-
     use_amp = device.type == "cuda"
+    total_microbatches = len(dataloader)
 
-    progress_bar = tqdm(dataloader, desc="E2 Training")
+    optimizer.zero_grad(set_to_none=True)
+    group_size = 0
+    microbatches_in_group = 0
+    progress_bar = tqdm(enumerate(dataloader, start=1),
+                        total=total_microbatches, desc="E2 Training")
 
-    for batch in progress_bar:
+    for batch_position, batch in progress_bar:
+        if microbatches_in_group == 0:
+            # The final accumulation group may contain fewer than the
+            # configured number of microbatches.
+            group_size = min(
+                gradient_accumulation_steps,
+                total_microbatches - batch_position + 1,
+            )
 
         batch = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.items()
         }
 
-        optimizer.zero_grad(set_to_none=True)
-
-        # Teacher forward pass.
         with torch.no_grad():
             with torch.autocast(
                 device_type=device.type,
@@ -357,86 +397,79 @@ def train_kd_one_epoch(
             ):
                 teacher_outputs = teacher(**batch)
 
-        # Student forward pass.
         with torch.autocast(
             device_type=device.type,
             dtype=torch.float16,
             enabled=use_amp,
         ):
             student_outputs = student(**batch)
+            losses = combined_distillation_loss(
+                teacher_logits=teacher_outputs.logits,
+                student_logits=student_outputs.logits,
+                labels=batch["labels"],
+                temperature=temperature,
+                lambda_kd=lambda_kd,
+            )
+            raw_loss = losses["loss"]
+            scaled_loss = raw_loss / group_size
 
-        # CE + KD objective.
-        losses = combined_distillation_loss(
-            teacher_logits=teacher_outputs.logits,
-            student_logits=student_outputs.logits,
-            labels=batch["labels"],
-            temperature=temperature,
-            lambda_kd=lambda_kd,
-        )
-
-        loss = losses["loss"]
-
-        # Backpropagation.
         if use_amp:
-
-            old_scale = scaler.get_scale()
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-
-            torch.nn.utils.clip_grad_norm_(
-                student.parameters(),
-                MAX_GRAD_NORM,
-            )
-
-            scaler.step(optimizer)
-            scaler.update()
-
-            # A reduced scale means the optimizer update was skipped.
-            update_succeeded = scaler.get_scale() >= old_scale
-
+            scaler.scale(scaled_loss).backward()
         else:
-
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(
-                student.parameters(),
-                MAX_GRAD_NORM,
-            )
-
-            optimizer.step()
-            update_succeeded = True
-
-        # Scheduler advances only after a successful optimizer update.
-        if update_succeeded:
-            scheduler.step()
+            scaled_loss.backward()
 
         batch_size = batch["input_ids"].size(0)
-
-        total_loss += losses["loss"].item() * batch_size
-        total_ce_loss += losses["ce_loss"].item() * batch_size
-        total_kd_loss += losses["kd_loss"].item() * batch_size
+        total_loss += raw_loss.detach().item() * batch_size
+        total_ce_loss += losses["ce_loss"].detach().item() * batch_size
+        total_kd_loss += losses["kd_loss"].detach().item() * batch_size
         total_examples += batch_size
+        microbatches_in_group += 1
 
-        global_step += 1
+        update_succeeded = None
+        if microbatches_in_group == group_size:
+            if use_amp:
+                old_scale = scaler.get_scale()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    student.parameters(), MAX_GRAD_NORM
+                )
+                scaler.step(optimizer)
+                scaler.update()
+                update_succeeded = scaler.get_scale() >= old_scale
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    student.parameters(), MAX_GRAD_NORM
+                )
+                optimizer.step()
+                update_succeeded = True
+
+            # Always clear the group, including after an AMP overflow skip.
+            optimizer.zero_grad(set_to_none=True)
+            microbatches_in_group = 0
+
+            if update_succeeded:
+                scheduler.step()
+                global_step += 1
+
+                if (
+                    checkpoint_callback is not None
+                    and checkpoint_every_steps > 0
+                    and global_step % checkpoint_every_steps == 0
+                ):
+                    checkpoint_callback(global_step)
 
         progress_bar.set_postfix(
-            loss=f"{loss.item():.4f}",
-            ce=f"{losses['ce_loss'].item():.4f}",
-            kd=f"{losses['kd_loss'].item():.4f}",
+            loss=f"{raw_loss.detach().item():.4f}",
+            ce=f"{losses['ce_loss'].detach().item():.4f}",
+            kd=f"{losses['kd_loss'].detach().item():.4f}",
             lr=f"{scheduler.get_last_lr()[0]:.2e}",
+            updates=global_step,
         )
 
-        # Save only at consumed-batch boundaries.
-        # Avoid saving after the final sample of an epoch because
-        # the sampler may be transitioning to its next epoch.
-        if (
-            checkpoint_callback is not None
-            and checkpoint_every_steps > 0
-            and global_step % checkpoint_every_steps == 0
-        ):
-            checkpoint_callback(global_step)
-
+    if microbatches_in_group != 0:
+        raise RuntimeError(
+            "Training ended with unstepped accumulated gradients."
+        )
     if total_examples == 0:
         raise ValueError("Training dataloader is empty.")
 
@@ -446,7 +479,6 @@ def train_kd_one_epoch(
         "kd_loss": total_kd_loss / total_examples,
         "global_step": global_step,
     }
-
 
 # ============================================================
 # 7. COMPLETE E2 TRAINING WORKFLOW
@@ -464,6 +496,7 @@ def train_kd_model(
     lambda_kd=KD_LAMBDA,
     resume_from=None,
     checkpoint_every_steps=KD_CHECKPOINT_EVERY_STEPS,
+    gradient_accumulation_steps=KD_GRADIENT_ACCUMULATION_STEPS,
 ):
     """
     Train E2 with full checkpoint recovery support.
@@ -477,6 +510,8 @@ def train_kd_model(
 
     if checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps cannot be negative.")
+    if gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be >= 1")
 
     if getattr(train_dataloader, "num_workers", 0) != 0:
         raise ValueError(
@@ -504,11 +539,14 @@ def train_kd_model(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    total_steps = len(train_dataloader) * num_epochs
+    updates_per_epoch = (
+        len(train_dataloader) + gradient_accumulation_steps - 1
+    ) // gradient_accumulation_steps
+    total_updates = updates_per_epoch * num_epochs
 
     optimizer, scheduler = create_optimizer_and_scheduler(
         student,
-        total_steps,
+        total_updates,
     )
 
     use_amp = device.type == "cuda"
@@ -522,6 +560,9 @@ def train_kd_model(
         num_epochs=num_epochs,
         temperature=temperature,
         lambda_kd=lambda_kd,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        checkpoint_every_steps=checkpoint_every_steps,
+        per_device_train_batch_size=train_dataloader.batch_size,
     )
 
     best_val_loss = float("inf")
@@ -595,6 +636,7 @@ def train_kd_model(
             lambda_kd=lambda_kd,
             checkpoint_callback=save_latest_mid_epoch,
             checkpoint_every_steps=checkpoint_every_steps,
+            gradient_accumulation_steps=gradient_accumulation_steps,
         )
 
         global_step = train_metrics["global_step"]
