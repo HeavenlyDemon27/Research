@@ -77,6 +77,7 @@ def initialize_student_from_teacher(teacher_model, student_model):
 
     # Preserve BART's shared embedding / LM head weight tying.
     student_model.tie_weights()
+    return student_model
 def verify_student_architecture(teacher_model, student_model):
     assert len(student_model.model.encoder.layers) == 6
     assert len(student_model.model.decoder.layers) == 6
