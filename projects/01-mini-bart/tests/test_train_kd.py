@@ -372,7 +372,7 @@ def test_empty_validation_dataloader_raises_error(
 # 8. Student receives gradients
 # --------------------------------------------------
 
-def test_student_receives_gradients(
+def test_gradients_are_cleared_after_update(
     dummy_models,
     dummy_dataloader,
     device,
