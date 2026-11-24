@@ -400,3 +400,40 @@ def test_student_receives_gradients(
         parameter.grad is None
         for parameter in student.parameters()
     )
+
+
+
+# --------------------------------------------------
+# 9. Gradient accumulation and smaller final group
+# --------------------------------------------------
+
+def test_gradient_accumulation_handles_partial_final_group(
+    dummy_models,
+    dummy_batch,
+    device,
+):
+    teacher, student = dummy_models
+    dataloader = [dummy_batch, dummy_batch, dummy_batch]
+
+    optimizer, scheduler, scaler = create_training_components(
+        student,
+        num_steps=2,
+    )
+
+    metrics = train_kd_one_epoch(
+        teacher=teacher,
+        student=student,
+        dataloader=dataloader,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        scaler=scaler,
+        gradient_accumulation_steps=2,
+        checkpoint_every_steps=0,
+    )
+
+    # Three microbatches form two optimizer updates: one group of two,
+    # followed by a smaller final group containing one microbatch.
+    assert metrics["global_step"] == 2
+    assert scheduler.last_epoch == 2
+    assert all(parameter.grad is None for parameter in student.parameters())
