@@ -183,7 +183,6 @@ def test_e2_end_to_end_training_and_mid_epoch_resume(
             temperature=2.0,
             lambda_kd=0.5,
             checkpoint_every_steps=1,
-        gradient_accumulation_steps=2,
             gradient_accumulation_steps=2,
         )
 
