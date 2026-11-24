@@ -44,6 +44,7 @@ def get_kd_config(
     lambda_kd,
     gradient_accumulation_steps=KD_GRADIENT_ACCUMULATION_STEPS,
     checkpoint_every_steps=KD_CHECKPOINT_EVERY_STEPS,
+    per_device_train_batch_size=1,
 ):
     """Return the experiment configuration saved in checkpoints."""
 
@@ -66,7 +67,7 @@ def get_kd_config(
         "dataset_version": "3.0.0",
         "max_input_length": 512,
         "max_target_length": 128,
-        "per_device_train_batch_size": 1,
+        "per_device_train_batch_size": per_device_train_batch_size,
         "seed": 42,
     }
 
@@ -561,6 +562,7 @@ def train_kd_model(
         lambda_kd=lambda_kd,
         gradient_accumulation_steps=gradient_accumulation_steps,
         checkpoint_every_steps=checkpoint_every_steps,
+        per_device_train_batch_size=train_dataloader.batch_size,
     )
 
     best_val_loss = float("inf")
