@@ -345,7 +345,6 @@ def test_empty_training_dataloader_raises_error(
             scheduler=scheduler,
             device=device,
             scaler=scaler,
-        gradient_accumulation_steps=1,
             gradient_accumulation_steps=1,
         )
 
